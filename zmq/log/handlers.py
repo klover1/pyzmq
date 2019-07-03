@@ -111,6 +111,82 @@ class PUBHandler(logging.Handler):
         self.socket.send_multipart([btopic, bmsg])
 
 
+class PUBHandlerAdvanced(logging.Handler):
+    """A slightly more advanced logging handler that emits log messages through a PUB socket. 
+    Differs from the standard PUBHandler in that it serializes the full python logger logrecord before sending to SUB.
+
+    Takes a PUB socket already bound to interfaces or an interface to bind to.
+
+    Example::
+
+        sock = context.socket(zmq.PUB)
+        sock.bind('inproc://log')
+        handler = PUBHandlerAdvanced(sock)
+
+    Or::
+
+        handler = PUBHandlerAdvanced('inproc://loc')
+
+    These are equivalent.
+
+    Log messages handled by this handler are broadcast with ZMQ topics
+    ``this.root_topic`` comes first, followed by the log level
+    (DEBUG,INFO,etc.), followed by any additional subtopics specified in the
+    message by: log.debug("subtopic.subsub::the real message")
+    """
+    root_topic = ""
+    socket = None
+
+    def __init__(self, interface_or_socket, context=None):
+        logging.Handler.__init__(self)
+        if isinstance(interface_or_socket, zmq.Socket):
+            self.socket = interface_or_socket
+            self.ctx = self.socket.context
+        else:
+            self.ctx = context or zmq.Context()
+            self.socket = self.ctx.socket(zmq.PUB)
+            self.socket.bind(interface_or_socket)
+            
+    def serialize(self, record):
+        return json.dumps(record.__dict__)
+
+    def emit(self, record):
+        """Emit a log message on my socket."""
+        try:
+            record = self.format(record)
+            topic, record.msg = record.msg.split(TOPIC_DELIM, 1)
+        except Exception:
+            topic = ""
+        try:
+            bmsg = cast_bytes(self.serialize(record))
+        except Exception:
+            self.handleError(record)
+            return
+
+        topic_list = []
+
+        if self.root_topic:
+            topic_list.append(self.root_topic)
+
+        topic_list.append(record.levelname)
+
+        if topic:
+            topic_list.append(topic)
+
+        btopic = b'.'.join(cast_bytes(t) for t in topic_list)
+
+        self.socket.send_multipart([btopic, bmsg])
+
+
+class ZMQRecordFormatter(logging.Formatter):
+    def format(self, record):
+        if record.exc_info:
+            # replace msg with exception information since exc_info cannot be easily converted into JSON
+            record.msg = record.msg + repr(super().formatException(record.exc_info))
+            record.exc_info = None
+        return record
+
+
 class TopicLogger(logging.Logger):
     """A simple wrapper that takes an additional argument to log methods.
 
