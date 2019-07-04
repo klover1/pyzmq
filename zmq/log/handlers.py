@@ -111,8 +111,8 @@ class PUBHandler(logging.Handler):
         self.socket.send_multipart([btopic, bmsg])
 
 
-class PUBHandlerAdvanced(logging.Handler):
-    """A slightly more advanced logging handler that emits log messages through a PUB socket. 
+class PUBLRHandler(logging.Handler):
+    """A slightly more advanced logging handler that emits log messages through a PUB socket.
     Differs from the standard PUBHandler in that it serializes the full python logger logrecord before sending to SUB.
 
     Takes a PUB socket already bound to interfaces or an interface to bind to.
@@ -121,11 +121,11 @@ class PUBHandlerAdvanced(logging.Handler):
 
         sock = context.socket(zmq.PUB)
         sock.bind('inproc://log')
-        handler = PUBHandlerAdvanced(sock)
+        handler = PUBLRHandler(sock)
 
     Or::
 
-        handler = PUBHandlerAdvanced('inproc://loc')
+        handler = PUBLRHandler('inproc://loc')
 
     These are equivalent.
 
@@ -146,14 +146,18 @@ class PUBHandlerAdvanced(logging.Handler):
             self.ctx = context or zmq.Context()
             self.socket = self.ctx.socket(zmq.PUB)
             self.socket.bind(interface_or_socket)
-            
+
+
     def serialize(self, record):
+        if record.exc_info:
+            # replace msg with exception information since exc_info cannot be easily converted into JSON
+            record.msg = record.msg + str(traceback.format_exception(record.exc_info[0], record.exc_info[1], record.exc_info[2]))
+            record.exc_info = None
         return json.dumps(record.__dict__)
 
     def emit(self, record):
         """Emit a log message on my socket."""
         try:
-            record = self.format(record)
             topic, record.msg = record.msg.split(TOPIC_DELIM, 1)
         except Exception:
             topic = ""
@@ -176,15 +180,6 @@ class PUBHandlerAdvanced(logging.Handler):
         btopic = b'.'.join(cast_bytes(t) for t in topic_list)
 
         self.socket.send_multipart([btopic, bmsg])
-
-
-class ZMQRecordFormatter(logging.Formatter):
-    def format(self, record):
-        if record.exc_info:
-            # replace msg with exception information since exc_info cannot be easily converted into JSON
-            record.msg = record.msg + repr(super().formatException(record.exc_info))
-            record.exc_info = None
-        return record
 
 
 class TopicLogger(logging.Logger):
